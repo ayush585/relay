@@ -1,0 +1,146 @@
+name: Reconcile queue evidence (temporary, fork only)
+
+# Red/green evidence for the Claude approval reconciliation fix. Never part
+# of an upstream PR. Runs only on a push to this branch; publishes nothing.
+on:
+  push:
+    branches: [ci/reconcile-queue-evidence]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: '1'
+  AGENT_RELAY_TELEMETRY_DISABLED: 1
+  MAIN_SHA: eb86bf7280e8b248248ce72ea3b285a490c4e1dc
+  # main plus the regression tests only (no fix).
+  REPRO_SHA: fdb5dc7e8eca360e66b9b1d6b37070b5b6f9eba0
+  # The fix on top of REPRO_SHA.
+  FIX_SHA: ce3178e9b74bc2684dc0a4d41d54740c20f53f71
+  EXPECTED: a full queue page removed the approval request it did not list
+  INTEGRATION: a_claude_approval_beyond_a_full_queue_page_is_kept
+  FULL_PAGE_UNIT: relay::claude_delivery_policy::tests::a_full_queue_page_keeps_the_holds_and_answers_it_does_not_list
+  SHORT_PAGE_UNIT: relay::claude_delivery_policy::tests::a_short_queue_page_removes_the_holds_and_answers_it_does_not_list
+  PRIOR_UNIT: relay::claude_delivery_policy::tests::a_successful_queue_read_durably_removes_only_expired_prior_holds
+
+defaults:
+  run:
+    working-directory: crates/relay-node
+
+jobs:
+  red-unmodified-main:
+    name: 'Red: regression test on unmodified main code'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # The verdict script comes from this workflow's own commit.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: evidence
+          sparse-checkout: .github
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.REPRO_SHA }}
+          path: code
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Only tests differ from main
+        working-directory: code
+        run: |
+          test "$(git rev-parse HEAD)" = "$REPRO_SHA"
+          test "$(git rev-parse HEAD^)" = "$MAIN_SHA"
+          git diff --stat HEAD^ HEAD
+          test -z "$(git diff --name-only HEAD^ HEAD | grep -v '^crates/relay-node/tests/')"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Build the test binary (a compile error fails this job; it is never red)
+        working-directory: code/crates/relay-node
+        run: cargo test --locked --test relay_agents --no-run
+      - name: Expect the behavioural assertion, and only it
+        working-directory: code/crates/relay-node
+        run: |
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export HOME="$RUNNER_TEMP/relay-node-home"; mkdir -p "$HOME"
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='env -u SSL_CERT_FILE -u SSL_CERT_DIR'
+          bash "$GITHUB_WORKSPACE/evidence/.github/expect-red.sh" --test relay_agents "$INTEGRATION"
+
+  red-reverted-guard:
+    name: 'Red: fix commit with the new guard disabled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          path: evidence
+          sparse-checkout: .github
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.FIX_SHA }}
+          path: code
+          persist-credentials: false
+      - name: Disable the partial-read guard (main's reconcile behaviour)
+        working-directory: code/crates/relay-node
+        run: |
+          test "$(git rev-parse HEAD)" = "$FIX_SHA"
+          test "$(grep -c '^        if !whole {$' src/relay/claude_delivery_policy.rs)" = 1
+          sed -i 's/^        if !whole {$/        if false \&\& !whole {/' src/relay/claude_delivery_policy.rs
+          git diff
+          test "$(git diff --numstat | awk '{print $1 + $2}')" = 2
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+      - name: Build the test binaries (a compile error fails this job; it is never red)
+        working-directory: code/crates/relay-node
+        run: cargo test --locked --lib --test relay_agents --no-run
+      - name: Expect the behavioural assertions; short-page cleanup still passes
+        working-directory: code/crates/relay-node
+        run: |
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export HOME="$RUNNER_TEMP/relay-node-home"; mkdir -p "$HOME"
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='env -u SSL_CERT_FILE -u SSL_CERT_DIR'
+          bash "$GITHUB_WORKSPACE/evidence/.github/expect-red.sh" --lib "$FULL_PAGE_UNIT"
+          bash "$GITHUB_WORKSPACE/evidence/.github/expect-red.sh" --test relay_agents "$INTEGRATION"
+          cargo test --locked --lib "$SHORT_PAGE_UNIT" -- --exact
+          cargo test --locked --lib "$PRIOR_UNIT" -- --exact
+
+  green:
+    name: 'Green: fix, format, clippy, focused and full tests'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ env.FIX_SHA }}
+          persist-credentials: false
+      - name: The commit under test
+        run: test "$(git rev-parse HEAD)" = "$FIX_SHA"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy (fails only on findings in the changed files)
+        if: always()
+        run: |
+          cargo clippy --locked --all-targets --message-format=short 2>&1 | tee "$RUNNER_TEMP/clippy.txt"
+          test "${PIPESTATUS[0]}" -eq 0
+          echo "warnings in total: $(grep -c ': warning: ' "$RUNNER_TEMP/clippy.txt" || true)"
+          if grep -E '^(src/relay/claude_delivery_policy\.rs|src/relay/delivery\.rs|tests/relay_agents\.rs|tests/support/fake_relaycast\.rs):' "$RUNNER_TEMP/clippy.txt"; then
+            exit 1
+          fi
+      - name: Focused tests
+        if: always()
+        run: |
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export HOME="$RUNNER_TEMP/relay-node-home"; mkdir -p "$HOME"
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='env -u SSL_CERT_FILE -u SSL_CERT_DIR'
+          cargo test --locked --lib relay::claude_delivery_policy::
+          cargo test --locked --lib relay::delivery::
+          cargo test --locked --test relay_agents claude
+      - name: Full suite (as upstream's Linux job)
+        if: always()
+        run: |
+          export RUSTUP_HOME="${RUSTUP_HOME:-$HOME/.rustup}" CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          export HOME="$RUNNER_TEMP/relay-node-home"; mkdir -p "$HOME"
+          export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='env -u SSL_CERT_FILE -u SSL_CERT_DIR'
+          cargo test --locked --no-fail-fast -- --test-threads=4
