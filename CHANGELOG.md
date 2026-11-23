@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `agent-relay-node`: a message waiting for your approval in Agent Relay is no longer forgotten while 50 or more messages are queued for its session. A queue read lists only the oldest 50, and every waiting message it did not list was taken to have left Relaycast: its approval request disappeared, along with an approval or dismissal you had just given, so a still-queued message was asked about again. A full page now removes nothing; a waiting message that expired is cleaned up by the next read listing fewer than 50.
 - `agent-relay-node`: a workspace leader's approve/deny reply (`spawn_leader_approvals`) now answers only in a 1:1 conversation that has exactly the session and the leader as participants, and approval notices are never sent into a 1:1 conversation that gained another participant. Relaycast lets a participant add a third agent to a 1:1 conversation without changing its type, so the conversation type alone no longer counts.
 
 ## [18.13.0] - 2026-11-23
