@@ -1242,8 +1242,10 @@ async fn a_claude_approval_beyond_a_full_queue_page_is_kept() {
     let pushed = h.fake.delivery_state(&newest).unwrap().item["message"].clone();
     h.core.wake(
         "claude-api".into(),
-        Some(json!({"type": "deliver", "delivery_id": newest, "msg_id": message,
-            "payload": {"type": "dm.received", "data": {"message": pushed}}})),
+        Some(
+            json!({"type": "deliver", "delivery_id": newest, "msg_id": message,
+            "payload": {"type": "dm.received", "data": {"message": pushed}}}),
+        ),
     );
     eventually("pushed delivery held", || {
         h.core
