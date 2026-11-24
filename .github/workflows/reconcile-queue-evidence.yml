@@ -13,11 +13,11 @@ env:
   CARGO_TERM_COLOR: never
   RUST_BACKTRACE: '1'
   AGENT_RELAY_TELEMETRY_DISABLED: 1
-  MAIN_SHA: bbc7f40c0127d4b6d793fb5f0c9b0497e7427bdc
+  MAIN_SHA: ecc97007b27214536cda04b6111ce62c7b270560
   # main plus the regression tests only (no fix).
-  REPRO_SHA: 905f6209a6e0da3abe4f07d628ac172b63c524c6
+  REPRO_SHA: 6db7db2c7b3db3ead40de6cdd44aa2abe8e2cb45
   # The fix on top of REPRO_SHA.
-  FIX_SHA: b67b1ae7219412a1db3040a35ed8b69d90ceac12
+  FIX_SHA: 2ef828491f93ed6898b97c1b0a0883846143fee2
   EXPECTED: a full queue page removed the approval request it did not list
   INTEGRATION: a_claude_approval_beyond_a_full_queue_page_is_kept
   FULL_PAGE_UNIT: relay::claude_delivery_policy::tests::a_full_queue_page_keeps_the_holds_and_answers_it_does_not_list
